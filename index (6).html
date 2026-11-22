@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>海洋微型生物多维数据终端 (OBIS + NCBI + BCO-DMO)</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 15px; font-family: 'Segoe UI', Tahoma, sans-serif; background: #0b1120; color: #e2e8f0; }
+        .container { max-width: 1400px; margin: 0 auto; background: #1e293b; padding: 20px; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+        h1 { margin-top: 0; font-size: 22px; color: #2dd4bf; display: flex; align-items: center; gap: 10px; }
+        
+        .search-box { display: flex; gap: 10px; margin-bottom: 10px; }
+        input[type="text"] { flex: 1; padding: 12px; font-size: 16px; border: 1px solid #334155; border-radius: 6px; background: #0f172a; color: #fff; }
+        button { padding: 12px 25px; font-size: 16px; background: #0d9488; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        button:hover { background: #0f766e; }
+        
+        .tags { margin-bottom: 15px; display: flex; gap: 8px; flex-wrap: wrap; }
+        .tag { background: #334155; color: #cbd5e1; padding: 5px 12px; border-radius: 15px; font-size: 12px; cursor: pointer; border: 1px solid transparent; transition: 0.2s; }
+        .tag:hover { background: #475569; border-color: #2dd4bf; }
+        
+        .layout { display: flex; gap: 15px; }
+        .left-col { flex: 1.4; min-width: 600px; }
+        .right-col { flex: 1; min-width: 380px; display: flex; flex-direction: column; gap: 15px; height: 600px; }
+        
+        #map { height: 550px; border-radius: 8px; border: 1px solid #334155; z-index: 1; }
+        #status { margin: 10px 0; font-size: 14px; color: #94a3b8; }
+        
+        .panel { background: #0f172a; border-radius: 8px; border: 1px solid #334155; padding: 15px; overflow-y: auto; position: relative;}
+        .panel h3 { margin: 0 0 10px 0; font-size: 14px; color: #2dd4bf; border-bottom: 1px solid #334155; padding-bottom: 8px; display: flex; justify-content: space-between;}
+        
+        .data-card { margin-bottom: 12px; padding: 10px; background: #1e293b; border-radius: 4px; border-left: 3px solid #0d9488;}
+        .data-title { font-size: 13px; font-weight: bold; color: #e2e8f0; text-decoration: none; line-height: 1.4; display: block; margin-bottom: 4px;}
+        .data-title:hover { color: #2dd4bf; text-decoration: underline; }
+        .data-meta { font-size: 11px; color: #64748b; }
+        
+        .download-btn { display: none; width: 100%; padding: 8px; background: #0ea5e9; color: white; text-align: center; border-radius: 4px; border: none; cursor: pointer; font-size: 13px; margin-top: 10px; }
+        .download-btn:hover { background: #0284c7; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🦠 海洋微型生物多维数据终端 (Microbial Data Terminal)</h1>
+    
+    <div class="search-box">
+        <input type="text" id="speciesInput" placeholder="输入分类阶元拉丁名 (例: Prochlorococcus, Cyanobacteria, SAR11)" />
+        <button id="searchBtn" onclick="searchSpecies()">检索数据</button>
+    </div>
+    
+    <div class="tags">
+        <span style="font-size:12px; color:#94a3b8; line-height:24px;">快捷检索:</span>
+        <span class="tag" onclick="quickSearch('Prochlorococcus')">原绿球藻</span>
+        <span class="tag" onclick="quickSearch('Cyanobacteria')">蓝细菌</span>
+        <span class="tag" onclick="quickSearch('Synechococcus')">聚球藻</span>
+        <span class="tag" onclick="quickSearch('Emiliania huxleyi')">赫氏艾密里藻 (球石藻)</span>
+        <span class="tag" onclick="quickSearch('Pelagibacter')">远洋杆菌 (SAR11)</span>
+        <span class="tag" onclick="quickSearch('Thaumarchaeota')">奇古菌门</span>
+    </div>
+
+    <div id="status">等待检索...</div>
+
+    <div class="layout">
+        <!-- 左侧地图 -->
+        <div class="left-col">
+            <div id="map"></div>
+        </div>
+        
+        <!-- 右侧数据面板 -->
+        <div class="right-col">
+            <div class="panel" style="flex: 1;">
+                <h3>🧬 NCBI 核酸序列 (GenBank)</h3>
+                <div id="ncbiBox">
+                    <div style="color: #64748b; font-size: 13px; text-align: center; margin-top: 20px;">暂无数据</div>
+                </div>
+            </div>
+            
+            <div class="panel" style="flex: 1;">
+                <h3>📊 BCO-DMO 海洋学项目</h3>
+                <div id="bcodmoBox">
+                    <div style="color: #64748b; font-size: 13px; text-align: center; margin-top: 20px;">暂无数据</div>
+                </div>
+            </div>
+            
+            <button id="downloadBtn" class="download-btn" onclick="downloadCSV()">⬇️ 下载 OBIS 空间分布数据 (CSV)</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const map = L.map('map').setView([20, 0], 2);
+    
+    // 【更新】使用 ESRI 海洋底图（无需 Key，深色海洋风格，极其适合海洋数据展示）
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles &copy; Esri &mdash; Sources: GEBCO, NOAA, CHS, OSU, UNH, CSUMB, National Geographic, DeLorme, NAVTEQ, and Esri'
+    }).addTo(map);
+    
+    let markersLayer = L.layerGroup().addTo(map);
+    let currentSpeciesName = "";
+    let currentGeodata = []; 
+
+    function quickSearch(name) {
+        document.getElementById('speciesInput').value = name;
+        searchSpecies();
+    }
+
+    async function searchSpecies() {
+        const input = document.getElementById('speciesInput').value.trim();
+        if (!input) return;
+        currentSpeciesName = input;
+
+        const statusDiv = document.getElementById('status');
+        const btn = document.getElementById('searchBtn');
+        const ncbiBox = document.getElementById('ncbiBox');
+        const bcodmoBox = document.getElementById('bcodmoBox');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        btn.disabled = true;
+        btn.textContent = "检索中...";
+        statusDiv.textContent = "并发请求 OBIS, NCBI, BCO-DMO 中...";
+        
+        markersLayer.clearLayers();
+        currentGeodata = []; 
+        downloadBtn.style.display = 'none';
+        ncbiBox.innerHTML = '<div style="color: #64748b; text-align: center;">加载中...</div>';
+        bcodmoBox.innerHTML = '<div style="color: #64748b; text-align: center;">加载中...</div>';
+
+        try {
+            const obisUrl = `https://api.obis.org/v3/occurrence?scientificname=${encodeURIComponent(input)}&size=1000&fields=scientificName,decimalLatitude,decimalLongitude,depth,eventDate`;
+            const ncbiUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=nucleotide&term=${encodeURIComponent(input)}&retmode=json&retmax=5`;
+
+            const [obisRes, ncbiRes] = await Promise.all([
+                fetch(obisUrl).catch(() => null),
+                fetch(ncbiUrl).catch(() => null)
+            ]);
+
+            // 1. 处理 OBIS
+            const obisData = obisRes ? await obisRes.json() : { total: 0, results: [] };
+            const results = obisData.results || [];
+            let validPoints = 0;
+            const bounds = [];
+
+            results.forEach(record => {
+                const lat = record.decimalLatitude;
+                const lng = record.decimalLongitude;
+                if (lat !== null && lng !== null) {
+                    validPoints++;
+                    bounds.push([lat, lng]);
+                    currentGeodata.push({ name: record.scientificName, lat: lat, lng: lng, depth: record.depth || '', date: record.eventDate || '' });
+
+                    const depthStr = record.depth ? `深度: ${record.depth} m` : '深度: 未知';
+                    L.circleMarker([lat, lng], { radius: 3, color: '#2dd4bf', fillOpacity: 0.8 }).addTo(markersLayer)
+                        .bindPopup(`<strong>${record.scientificName}</strong><br>${depthStr}`);
+                }
+            });
+
+            if (validPoints > 0) {
+                map.fitBounds(bounds, { padding: [30, 30] });
+                statusDiv.innerHTML = `检索完成 | OBIS 空间记录点: ${validPoints} 个`;
+                downloadBtn.style.display = 'block';
+            } else {
+                statusDiv.innerHTML = `未在 OBIS 找到空间坐标记录。`;
+            }
+
+            // 2. 处理 NCBI
+            if (ncbiRes && ncbiRes.ok) {
+                const ncbiData = await ncbiRes.json();
+                const idList = ncbiData.esearchresult?.idlist || [];
+                if (idList.length > 0) {
+                    const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=nucleotide&id=${idList.join(',')}&retmode=json`;
+                    const summaryRes = await fetch(summaryUrl);
+                    const summaryData = await summaryRes.json();
+                    const resultObj = summaryData.result;
+                    
+                    ncbiBox.innerHTML = '';
+                    idList.forEach(id => {
+                        const item = resultObj[id];
+                        if(item) {
+                            const card = document.createElement('div');
+                            card.className = 'data-card';
+                            card.innerHTML = `
+                                <a href="https://www.ncbi.nlm.nih.gov/nuccore/${id}" target="_blank" class="data-title">${item.title}</a>
+                                <div class="data-meta">Accession: ${item.accessionversion} | Length: ${item.slen} bp</div>
+                            `;
+                            ncbiBox.appendChild(card);
+                        }
+                    });
+                } else {
+                    ncbiBox.innerHTML = '<div style="color: #64748b; font-size: 13px;">NCBI 未找到核酸序列</div>';
+                }
+            }
+
+            // 3. 处理 BCO-DMO (改为直达链接形式，避免 CORS 超时)
+            bcodmoBox.innerHTML = `
+                <div class="data-card" style="border-left-color: #0ea5e9;">
+                    <a href="https://www.bco-dmo.org/search/node?keys=${encodeURIComponent(input)}" target="_blank" class="data-title" style="color:#0ea5e9;">
+                        👉 点击前往 BCO-DMO 检索 "${input}" 的科考数据
+                    </a>
+                    <div class="data-meta">BCO-DMO 提供海洋生态、生物地球化学相关的实测理化参数（如营养盐、叶绿素、温度等）。由于跨域限制，请点击直达官方检索页。</div>
+                </div>
+            `;
+
+        } catch (error) {
+            console.error(error);
+            statusDiv.textContent = "查询失败。";
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "检索数据";
+        }
+    }
+
+    function downloadCSV() {
+        if (currentGeodata.length === 0) return;
+        let csvContent = "Scientific Name,Latitude,Longitude,Depth,Date\n";
+        currentGeodata.forEach(row => {
+            csvContent += `"${row.name}",${row.lat},${row.lng},${row.depth},"${row.date}"\n`;
+        });
+        const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `${currentSpeciesName}_microbial_OBIS.csv`;
+        link.click();
+    }
+
+    document.getElementById('speciesInput').addEventListener('keypress', function (e) {
+        if (e.key === 'Enter') searchSpecies();
+    });
+</script>
+
+</body>
+</html>
